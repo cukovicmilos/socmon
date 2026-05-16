@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Instagram notifier - skenira praćene profile za nove postove i šalje Telegram notifikacije."""
 
+import os
 import sqlite3
 import subprocess
 import sys
@@ -11,9 +12,24 @@ import instaloader
 SCRIPT_DIR = Path(__file__).parent
 DB_PATH = SCRIPT_DIR / 'ig_state.db'
 PROFILES_PATH = SCRIPT_DIR / 'profiles.txt'
+ENV_PATH = SCRIPT_DIR / '.env'
 NOTIFY_BIN = '/var/www/html/notifierbot/notify'
 MAX_INIT_POSTS = 10
-SESSION_USER = 'cukovicmilos'
+USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+
+
+def load_env():
+    env = {}
+    if ENV_PATH.exists():
+        with open(ENV_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    env[key.strip()] = value.strip()
+    return env
 
 
 def get_db():
@@ -138,6 +154,14 @@ def main():
         print(f"profiles.txt not found at {PROFILES_PATH}", file=sys.stderr)
         sys.exit(1)
 
+    env = load_env()
+    username = env.get('INSTAGRAM_USERNAME')
+    password = env.get('INSTAGRAM_PASSWORD')
+
+    if not username or not password:
+        print("INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD must be set in .env", file=sys.stderr)
+        sys.exit(3)
+
     with open(PROFILES_PATH) as f:
         profiles = [
             line.strip() for line in f
@@ -148,22 +172,24 @@ def main():
         print("No profiles to track in profiles.txt", file=sys.stderr)
         sys.exit(1)
 
-    L = instaloader.Instaloader(
-        user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-    )
+    session_dir = Path.home() / '.config' / 'instaloader'
+    session_file = session_dir / f'session-{username}'
 
-    try:
-        L.load_session_from_file(SESSION_USER)
+    L = instaloader.Instaloader(user_agent=USER_AGENT)
+
+    if session_file.exists():
+        L.load_session_from_file(username, filename=str(session_file))
         print("Sesija učitana.")
-    except FileNotFoundError:
-        print(
-            f"Session file not found. Pokreni: instaloader --login {SESSION_USER}",
-            file=sys.stderr
-        )
-        sys.exit(2)
-    except Exception as e:
-        print(f"Sesija nije učitana: {e}", file=sys.stderr)
-        sys.exit(2)
+    else:
+        print("Sesija ne postoji — login...")
+        try:
+            L.login(username, password)
+            session_dir.mkdir(parents=True, exist_ok=True)
+            L.save_session_to_file(str(session_file))
+            print("Login uspešan, sesija sačuvana.")
+        except Exception as e:
+            print(f"Login failed: {e}", file=sys.stderr)
+            sys.exit(2)
 
     db = get_db()
 

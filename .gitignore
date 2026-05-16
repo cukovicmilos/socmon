@@ -1,3 +1,5 @@
 __pycache__/
 ig_state.db
 *.pyc
+.env
+profiles.txt
